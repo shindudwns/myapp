@@ -1,4 +1,20 @@
 {
+  "files.associations": {
+    "*.tsx": "typescriptreact",
+
+    // ✅ ts/js config들은 전부 JSON with Comments로 인식
+    "tsconfig.json": "jsonc",
+    "**/tsconfig.json": "jsonc",
+    "tsconfig.*.json": "jsonc",
+    "jsconfig.json": "jsonc",
+    "**/jsconfig.json": "jsonc"
+  },
+  "json.schemas": [
+    {
+      "fileMatch": ["tsconfig.json", "tsconfig.*.json"],
+      "url": "https://json.schemastore.org/tsconfig"
+    }
+  ],
   "editor.codeActionsOnSave": {
     "source.fixAll": "explicit",
     "source.organizeImports": "explicit",
