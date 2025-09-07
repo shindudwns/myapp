@@ -1,4 +1,3 @@
-// app/(tabs)/hud.tsx
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import * as Location from 'expo-location';
@@ -22,10 +21,7 @@ export default function HUDScreen() {
 
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setError('위치 권한이 필요합니다.');
-        return;
-      }
+      if (status !== 'granted') { setError('위치 권한이 필요합니다.'); return; }
       locSub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, distanceInterval: 1, timeInterval: 1000 },
         (loc) => {
@@ -35,10 +31,7 @@ export default function HUDScreen() {
       );
     })();
 
-    return () => {
-      accelSub && accelSub.remove();
-      locSub && locSub.remove();
-    };
+    return () => { accelSub && accelSub.remove(); locSub && locSub.remove(); };
   }, []);
 
   const kmh = speed != null && speed >= 0 ? (speed * 3.6).toFixed(1) : '-';
@@ -63,7 +56,9 @@ export default function HUDScreen() {
         <Card label="Accel Z" value={String(az)} />
       </ThemedView>
 
-      <ThemedText style={{ opacity: 0.6, marginTop: 8 }}>팁: 실제 이동 중에 속도/방위가 업데이트됩니다.</ThemedText>
+      <ThemedText style={{ opacity: 0.6, marginTop: 8 }}>
+        팁: 실제 이동 중에 속도/방위가 업데이트됩니다.
+      </ThemedText>
     </ThemedView>
   );
 }

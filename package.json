@@ -10,6 +10,9 @@
     "web": "expo start --web",
     "lint": "expo lint"
   },
+  "scripts": {
+    "start:dev": "expo start --dev-client"
+  },
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
     "@react-navigation/bottom-tabs": "^7.3.10",
