@@ -73,38 +73,77 @@ type DirStep = {
   maneuver?: string;
 };
 
-// maneuver → 아이콘/한국어 라벨
-function maneuverInfo(m?: string): { icon: string; label: string } {
+// maneuver → 화살표 글리프 + 한국어 라벨
+function maneuverInfo(m?: string): { glyph: string; label: string } {
   switch (m) {
-    case 'turn-right': return { icon: '➡️', label: '우회전' };
-    case 'turn-left': return { icon: '⬅️', label: '좌회전' };
-    case 'turn-slight-right': return { icon: '↗️', label: '약간 우회전' };
-    case 'turn-slight-left': return { icon: '↖️', label: '약간 좌회전' };
-    case 'turn-sharp-right': return { icon: '⤴️', label: '급우회전' };
-    case 'turn-sharp-left': return { icon: '⤴️', label: '급좌회전' };
+    case 'turn-right': return { glyph: '↱', label: '우회전' };
+    case 'turn-left': return { glyph: '↰', label: '좌회전' };
+    case 'turn-slight-right': return { glyph: '➚', label: '약간 우' };
+    case 'turn-slight-left': return { glyph: '➚', label: '약간 좌' };
+    case 'turn-sharp-right': return { glyph: '⤴', label: '급우' };
+    case 'turn-sharp-left': return { glyph: '⤴', label: '급좌' };
     case 'uturn-right':
-    case 'uturn-left': return { icon: '↩️', label: '유턴' };
-    case 'merge': return { icon: '🔀', label: '합류' };
-    case 'ramp-right': return { icon: '↗️', label: '우측 램프' };
-    case 'ramp-left': return { icon: '↖️', label: '좌측 램프' };
-    case 'fork-right': return { icon: '➡️', label: '우측 분기' };
-    case 'fork-left': return { icon: '⬅️', label: '좌측 분기' };
-    case 'keep-right': return { icon: '➡️', label: '우측 유지' };
-    case 'keep-left': return { icon: '⬅️', label: '좌측 유지' };
-    case 'straight': return { icon: '⬆️', label: '직진' };
-    default: return { icon: '⬆️', label: '직진' };
+    case 'uturn-left': return { glyph: '↩', label: '유턴' };
+    case 'merge': return { glyph: '⇱', label: '합류' };
+    case 'ramp-right': return { glyph: '↗', label: '우측 램프' };
+    case 'ramp-left': return { glyph: '↖', label: '좌측 램프' };
+    case 'fork-right': return { glyph: '⤳', label: '우측 분기' };
+    case 'fork-left': return { glyph: '⤶', label: '좌측 분기' };
+    case 'keep-right': return { glyph: '→', label: '우측 유지' };
+    case 'keep-left': return { glyph: '←', label: '좌측 유지' };
+    case 'straight': default: return { glyph: '↑', label: '직진' };
   }
 }
 
 // html_instructions 정리: 태그/괄호/Pass by 제거 + 도로명 추출
 function cleanInstruction(html: string): { plain: string; road?: string } {
-  let plain = (html ?? '').replace(/<[^>]+>/g, '');         // 태그 제거
-  plain = plain.replace(/\(.*?\)/g, '').trim();             // 괄호 속 코멘트 제거
-  plain = plain.replace(/\bPass by .+$/i, '').trim();       // 'Pass by ...' 뒤 삭제
+  let plain = (html ?? '').replace(/<[^>]+>/g, '');
+  plain = plain.replace(/\(.*?\)/g, '').trim();
+  plain = plain.replace(/\bPass by .+$/i, '').trim();
   const onto = plain.match(/\bonto\s+(.+)$/i);
   const toward = plain.match(/\btoward\s+(.+)$/i);
   return { plain, road: onto?.[1] ?? toward?.[1] };
 }
+
+// ── UI 구성요소: 큰 카드 + 작은 바 ────────────────────────────────────────────
+function PrimaryTurnCard({
+  titleGlyph,
+  titleLabel,
+  distanceText,
+  road,
+}: { titleGlyph: string; titleLabel: string; distanceText: string; road?: string | null }) {
+  return (
+    <View style={styles.primaryCard}>
+      <View style={styles.primaryIconCircle}>
+        <ThemedText style={styles.primaryIcon}>{titleGlyph}</ThemedText>
+      </View>
+      <View style={{ flex: 1 }}>
+        <ThemedText style={styles.primaryTitle}>
+          {titleLabel} · {distanceText}
+        </ThemedText>
+        {road ? <ThemedText style={styles.primaryRoad}>{road}</ThemedText> : null}
+      </View>
+    </View>
+  );
+}
+
+function SecondaryTurnStrip({
+  glyph,
+  label,
+  distanceText,
+  road,
+}: { glyph: string; label: string; distanceText: string; road?: string | null }) {
+  return (
+    <View style={styles.secondaryStrip}>
+      <ThemedText style={styles.secondaryGlyph}>{glyph}</ThemedText>
+      <ThemedText style={styles.secondaryText}>
+        {label} · {distanceText}{road ? ` · ${road}` : ''}
+      </ThemedText>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
@@ -124,8 +163,13 @@ export default function MapScreen() {
 
   const [steps, setSteps] = useState<DirStep[]>([]);
   const [stepIdx, setStepIdx] = useState<number>(0);
-  const [hudPrimary, setHudPrimary] = useState<string | null>(null);    // 다음 턴 (남은거리)
-  const [hudSecondary, setHudSecondary] = useState<string | null>(null); // 그다음 턴 (추가거리)
+
+  const [hudPrimary, setHudPrimary] = useState<{
+    glyph: string; label: string; distance: string; road?: string | null;
+  } | null>(null);
+  const [hudSecondary, setHudSecondary] = useState<{
+    glyph: string; label: string; distance: string; road?: string | null;
+  } | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [debugMsg, setDebugMsg] = useState<string>('');
@@ -167,62 +211,55 @@ export default function MapScreen() {
     return () => { sub && sub.remove(); };
   }, []);
 
-  // 현재 위치 변화 시: ① 다음 턴(남은거리), ② 그다음 턴(추가거리=step2 길이)
+  // HUD 계산: ① 다음 턴(현재→step1 끝) ② 그다음 턴(추가거리 = step2 길이)
   useEffect(() => {
     if (!myPos || steps.length === 0) return;
     const i = Math.min(stepIdx, steps.length - 1);
     const s1 = steps[i];
 
-    // ① 다음 턴까지 남은 거리
+    // ① 다음 턴
     const end1: LatLng = { latitude: s1.end_location.lat, longitude: s1.end_location.lng };
     const remainToNext = haversineMeters(myPos, end1);
-    setHudPrimary(makePrimaryLine(s1, remainToNext));
+    const p1 = makePrimaryPayload(s1, remainToNext);
+    setHudPrimary(p1);
 
-    // ② 그다음 턴까지 “추가로” 달릴 거리 = step2.distance.value
+    // ② 그다음 턴 추가거리
     const s2 = steps[i + 1];
-    if (s2) {
-      const extraAfterNext = s2.distance?.value ?? 0; // m
-      setHudSecondary(makeSecondaryLine(s2, extraAfterNext));
-    } else {
-      setHudSecondary(null);
-    }
+    if (s2) setHudSecondary(makeSecondaryPayload(s2, s2.distance?.value ?? 0));
+    else setHudSecondary(null);
 
-    // 접근 임계값 도달 시 다음 step으로 전환
+    // step 자동 전환
     const ARRIVE_THRESHOLD_M = 120;
     if (remainToNext <= ARRIVE_THRESHOLD_M) {
       if (i < steps.length - 1) setStepIdx(i + 1);
-      else { setHudPrimary('목적지에 도착'); setHudSecondary(null); }
+      else { setHudSecondary(null); }
     }
   }, [myPos, steps, stepIdx]);
 
-  // ① 다음 턴 라인 (남은거리)
-  function makePrimaryLine(step: DirStep, remainMetersFromNow: number): string {
+  function makePrimaryPayload(step: DirStep, remainMetersFromNow: number) {
     const { plain, road } = cleanInstruction(step.html_instructions);
-    let title = '';
+    let glyph = '↑', label = '직진';
     if (step.maneuver && step.maneuver.startsWith('roundabout')) {
       const exit = plain.match(/(\d+)(st|nd|rd|th)\s+exit/i)?.[1];
-      title = `🔁 로터리 ${exit ? `${exit}번째 출구` : '통과'}`;
+      glyph = '⟳'; label = `로터리 ${exit ? `${exit}번째 출구` : '통과'}`;
     } else {
-      const { icon, label } = maneuverInfo(step.maneuver);
-      title = `${icon} ${label}`;
+      const m = maneuverInfo(step.maneuver);
+      glyph = m.glyph; label = m.label;
     }
-    const base = `${title} · ${formatUSDistance(remainMetersFromNow, 1)}`;
-    return road ? `${base} · ${road}` : base;
+    return { glyph, label, distance: formatUSDistance(remainMetersFromNow, 1), road };
   }
 
-  // ② 그다음 턴 라인 (추가거리 = step2 길이)
-  function makeSecondaryLine(step: DirStep, extraMetersAfterNext: number): string {
+  function makeSecondaryPayload(step: DirStep, extraMetersAfterNext: number) {
     const { plain, road } = cleanInstruction(step.html_instructions);
-    let title = '';
+    let glyph = '↑', label = '직진';
     if (step.maneuver && step.maneuver.startsWith('roundabout')) {
       const exit = plain.match(/(\d+)(st|nd|rd|th)\s+exit/i)?.[1];
-      title = `다음 ▶ 로터리 ${exit ? `${exit}번째 출구` : '통과'}`;
+      glyph = '⟳'; label = `로터리 ${exit ? `${exit}번째 출구` : '통과'}`;
     } else {
-      const { icon, label } = maneuverInfo(step.maneuver);
-      title = `그다음 ▶ ${icon} ${label}`;
+      const m = maneuverInfo(step.maneuver);
+      glyph = m.glyph; label = m.label;
     }
-    const base = `${title} · ${formatUSDistance(extraMetersAfterNext, 2)}`;
-    return road ? `${base} · ${road}` : base;
+    return { glyph, label, distance: formatUSDistance(extraMetersAfterNext, 2), road };
   }
 
   /** Geocoding */
@@ -275,15 +312,11 @@ export default function MapScreen() {
     setSteps(legSteps);
     setStepIdx(0);
 
-    // 초기 HUD
     if (legSteps.length > 0 && myPos) {
-      const s1 = legSteps[0];
-      const end1: LatLng = { latitude: s1.end_location.lat, longitude: s1.end_location.lng };
-      const remain = haversineMeters(myPos, end1);
-      setHudPrimary(makePrimaryLine(s1, remain));
-
-      const s2 = legSteps[1];
-      if (s2) setHudSecondary(makeSecondaryLine(s2, s2.distance?.value ?? 0));
+      setHudPrimary(makePrimaryPayload(legSteps[0], haversineMeters(myPos, {
+        latitude: legSteps[0].end_location.lat, longitude: legSteps[0].end_location.lng,
+      })));
+      if (legSteps[1]) setHudSecondary(makeSecondaryPayload(legSteps[1], legSteps[1].distance?.value ?? 0));
       else setHudSecondary(null);
     } else {
       setHudPrimary(null); setHudSecondary(null);
@@ -291,7 +324,7 @@ export default function MapScreen() {
 
     if (mapRef.current && points.length) {
       mapRef.current.fitToCoordinates(points, {
-        edgePadding: { top: 80, bottom: 160, left: 40, right: 40 },
+        edgePadding: { top: 80, bottom: 180, left: 40, right: 40 },
         animated: true,
       });
     }
@@ -361,7 +394,7 @@ export default function MapScreen() {
       <View style={[styles.searchRow, { paddingTop: insets.top + 8 }]}>
         <TextInput
           style={styles.input}
-          placeholder="Enter destination in the US (e.g., Cook Out)"
+          placeholder="Enter destination in the US (e.g., 2300 College Ave)"
           value={destText}
           onChangeText={setDestText}
           returnKeyType="search"
@@ -372,15 +405,26 @@ export default function MapScreen() {
         <Button title="검색" onPress={onSearch} />
       </View>
 
-      {/* ✅ HUD: 다음/그다음(추가거리) + 속도 */}
+      {/* ✅ 새 HUD 카드 */}
       {(hudPrimary || hudSecondary) && (
-        <View
-          pointerEvents="none"
-          style={[styles.hudBox, { top: (insets.top ?? 0) + 64 }]}
-        >
-          {hudPrimary && <ThemedText style={styles.hudMain}>{hudPrimary}</ThemedText>}
-          {hudSecondary && <ThemedText style={styles.hudSecond}>{hudSecondary}</ThemedText>}
-          <ThemedText style={styles.hudSub}>Speed {formatUSSpeed(gpsSpeed)}</ThemedText>
+        <View style={[styles.hudWrap, { top: (insets.top ?? 0) + 64 }]}>
+          {hudPrimary && (
+            <PrimaryTurnCard
+              titleGlyph={hudPrimary.glyph}
+              titleLabel={hudPrimary.label}
+              distanceText={hudPrimary.distance}
+              road={hudPrimary.road}
+            />
+          )}
+          {hudSecondary && (
+            <SecondaryTurnStrip
+              glyph={hudSecondary.glyph}
+              label={hudSecondary.label}
+              distanceText={hudSecondary.distance}
+              road={hudSecondary.road ?? undefined}
+            />
+          )}
+          <ThemedText style={styles.speedText}>Speed {formatUSSpeed(gpsSpeed)}</ThemedText>
         </View>
       )}
 
@@ -402,8 +446,13 @@ export default function MapScreen() {
   );
 }
 
+const GREEN = '#1d7f3d';
+const GREEN_DARK = '#11592a';
+const GREEN_LIGHT = '#2da85a';
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
+
   searchRow: {
     position: 'absolute',
     top: 0, left: 0, right: 0,
@@ -415,6 +464,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1, height: 42, borderRadius: 10, paddingHorizontal: 12, backgroundColor: '#fff',
   },
+
   footer: {
     position: 'absolute',
     left: 0, right: 0, bottom: 0,
@@ -424,18 +474,59 @@ const styles = StyleSheet.create({
   info: { textAlign: 'center', opacity: 0.9 },
   buttons: { gap: 8 },
 
-  // ✅ HUD
-  hudBox: {
+  // ✅ HUD container
+  hudWrap: {
     position: 'absolute',
     left: 12, right: 12,
-    backgroundColor: 'rgba(0,0,0,0.62)',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.18)', // 외곽 어두운 그림자 느낌
+    padding: 6,
     zIndex: 9999,
   },
-  hudMain:   { color: '#fff', fontSize: 20, fontWeight: '800', textAlign: 'center' },
-  hudSecond: { color: '#fff', fontSize: 16, fontWeight: '700', marginTop: 6, textAlign: 'center', opacity: 0.95 },
-  hudSub:    { color: '#fff', opacity: 0.9, marginTop: 6, fontSize: 14 },
+
+  // 상단 큰 카드
+  primaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  primaryIconCircle: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: GREEN_LIGHT,
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 10,
+  },
+  primaryIcon: { color: '#fff', fontSize: 22, fontWeight: '800' },
+  primaryTitle: { color: '#fff', fontSize: 22, fontWeight: '900' },
+  primaryRoad:  { color: '#e6ffe9', fontSize: 14, marginTop: 2, opacity: 0.95 },
+
+  // 하단 얇은 바
+  secondaryStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: GREEN_DARK,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderBottomLeftRadius: 14,
+    borderBottomRightRadius: 14,
+  },
+  secondaryGlyph: { color: '#c7ffcf', fontSize: 16, fontWeight: '800', marginRight: 8 },
+  secondaryText:  { color: '#c7ffcf', fontSize: 15, fontWeight: '700' },
+
+  // 속도
+  speedText: {
+    textAlign: 'center',
+    color: '#fff',
+    marginTop: 6,
+    marginBottom: 2,
+    fontSize: 13,
+    opacity: 0.95,
+  },
 });
