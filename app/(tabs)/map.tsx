@@ -14,7 +14,7 @@ type LatLng = { latitude: number; longitude: number };
 // ✅ 미국 기본
 const COUNTRY_BIAS = 'US';
 
-// REST 키(Geocoding/Directions) 읽기
+// REST 키(Geocoding/Directions)
 const getMapsKey = (): string =>
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY ??
   (Constants.expoConfig?.extra as any)?.EXPO_PUBLIC_GOOGLE_MAPS_KEY ??
@@ -51,12 +51,11 @@ function haversineMeters(a: LatLng, b: LatLng): number {
 }
 
 // 미국식 거리 포맷
-function formatUSDistance(meters: number): string {
+function formatUSDistance(meters: number, precisionForMiles: number = 1): string {
   const feet = meters * 3.28084;
   if (feet < 1000) return `${Math.round(feet)} ft`;
   const miles = meters / 1609.344;
-  if (miles < 10) return `${miles.toFixed(1)} mi`;
-  return `${Math.round(miles)} mi`;
+  return `${miles.toFixed(precisionForMiles)} mi`;
 }
 
 // 속도(m/s → mph, 음수 보정)
@@ -70,12 +69,11 @@ function formatUSSpeed(ms?: number | null): string {
 type DirStep = {
   end_location: { lat: number; lng: number };
   html_instructions: string;
-  distance?: { text: string; value: number };
+  distance?: { text: string; value: number }; // meters
   maneuver?: string;
-  // roundabout일 때 exit 번호가 instruction 안에 들어오므로 별도 필드는 없음
 };
 
-// maneuver → 아이콘/한국어 라벨 매핑
+// maneuver → 아이콘/한국어 라벨
 function maneuverInfo(m?: string): { icon: string; label: string } {
   switch (m) {
     case 'turn-right': return { icon: '➡️', label: '우회전' };
@@ -94,18 +92,18 @@ function maneuverInfo(m?: string): { icon: string; label: string } {
     case 'keep-right': return { icon: '➡️', label: '우측 유지' };
     case 'keep-left': return { icon: '⬅️', label: '좌측 유지' };
     case 'straight': return { icon: '⬆️', label: '직진' };
-    // roundabout-* 는 아래에서 텍스트로 보완
     default: return { icon: '⬆️', label: '직진' };
   }
 }
 
-// html_instructions에서 간단한 도로명 추출 (onto/toward 뒤 꼬리표)
-function extractRoadName(plain: string): string | null {
+// html_instructions 정리: 태그/괄호/Pass by 제거 + 도로명 추출
+function cleanInstruction(html: string): { plain: string; road?: string } {
+  let plain = (html ?? '').replace(/<[^>]+>/g, '');         // 태그 제거
+  plain = plain.replace(/\(.*?\)/g, '').trim();             // 괄호 속 코멘트 제거
+  plain = plain.replace(/\bPass by .+$/i, '').trim();       // 'Pass by ...' 뒤 삭제
   const onto = plain.match(/\bonto\s+(.+)$/i);
-  if (onto) return onto[1];
   const toward = plain.match(/\btoward\s+(.+)$/i);
-  if (toward) return toward[1];
-  return null;
+  return { plain, road: onto?.[1] ?? toward?.[1] };
 }
 
 export default function MapScreen() {
@@ -126,7 +124,8 @@ export default function MapScreen() {
 
   const [steps, setSteps] = useState<DirStep[]>([]);
   const [stepIdx, setStepIdx] = useState<number>(0);
-  const [hudLine, setHudLine] = useState<string | null>(null);
+  const [hudPrimary, setHudPrimary] = useState<string | null>(null);    // 다음 턴 (남은거리)
+  const [hudSecondary, setHudSecondary] = useState<string | null>(null); // 그다음 턴 (추가거리)
 
   const [error, setError] = useState<string | null>(null);
   const [debugMsg, setDebugMsg] = useState<string>('');
@@ -145,11 +144,7 @@ export default function MapScreen() {
     let sub: { remove: () => void } | null = null;
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setError('위치 권한이 필요합니다.');
-        setHasPerm(false);
-        return;
-      }
+      if (status !== 'granted') { setError('위치 권한이 필요합니다.'); setHasPerm(false); return; }
       setHasPerm(true);
 
       const cur = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -172,38 +167,63 @@ export default function MapScreen() {
     return () => { sub && sub.remove(); };
   }, []);
 
-  // 현재 위치 변화 시 HUD/step 전환
+  // 현재 위치 변화 시: ① 다음 턴(남은거리), ② 그다음 턴(추가거리=step2 길이)
   useEffect(() => {
     if (!myPos || steps.length === 0) return;
-    const idx = Math.min(stepIdx, steps.length - 1);
-    const step = steps[idx];
-    if (!step) return;
+    const i = Math.min(stepIdx, steps.length - 1);
+    const s1 = steps[i];
 
-    const end: LatLng = { latitude: step.end_location.lat, longitude: step.end_location.lng };
-    const remain = haversineMeters(myPos, end);
+    // ① 다음 턴까지 남은 거리
+    const end1: LatLng = { latitude: s1.end_location.lat, longitude: s1.end_location.lng };
+    const remainToNext = haversineMeters(myPos, end1);
+    setHudPrimary(makePrimaryLine(s1, remainToNext));
 
-    // 텍스트 생성
-    const plain = (step.html_instructions ?? '').replace(/<[^>]+>/g, '');
-    const rd = extractRoadName(plain);
-    let label = '';
-    if (step.maneuver && step.maneuver.startsWith('roundabout')) {
-      // roundabout-right / roundabout-left – 안내문에 'Take the 2nd exit' 같은 문구 포함됨
-      const exit = plain.match(/(\d+)(st|nd|rd|th)\s+exit/i)?.[1];
-      label = `로터리 ${exit ? `${exit}번째 출구` : '통과'}`;
+    // ② 그다음 턴까지 “추가로” 달릴 거리 = step2.distance.value
+    const s2 = steps[i + 1];
+    if (s2) {
+      const extraAfterNext = s2.distance?.value ?? 0; // m
+      setHudSecondary(makeSecondaryLine(s2, extraAfterNext));
     } else {
-      const { icon, label: ko } = maneuverInfo(step.maneuver);
-      label = `${icon} ${ko}`;
+      setHudSecondary(null);
     }
-    const base = `${label} • ${formatUSDistance(remain)}`;
-    setHudLine(rd ? `${base} · ${rd}` : base);
 
-    // 접근 임계값
+    // 접근 임계값 도달 시 다음 step으로 전환
     const ARRIVE_THRESHOLD_M = 120;
-    if (remain <= ARRIVE_THRESHOLD_M) {
-      if (idx < steps.length - 1) setStepIdx(idx + 1);
-      else setHudLine('목적지에 도착');
+    if (remainToNext <= ARRIVE_THRESHOLD_M) {
+      if (i < steps.length - 1) setStepIdx(i + 1);
+      else { setHudPrimary('목적지에 도착'); setHudSecondary(null); }
     }
   }, [myPos, steps, stepIdx]);
+
+  // ① 다음 턴 라인 (남은거리)
+  function makePrimaryLine(step: DirStep, remainMetersFromNow: number): string {
+    const { plain, road } = cleanInstruction(step.html_instructions);
+    let title = '';
+    if (step.maneuver && step.maneuver.startsWith('roundabout')) {
+      const exit = plain.match(/(\d+)(st|nd|rd|th)\s+exit/i)?.[1];
+      title = `🔁 로터리 ${exit ? `${exit}번째 출구` : '통과'}`;
+    } else {
+      const { icon, label } = maneuverInfo(step.maneuver);
+      title = `${icon} ${label}`;
+    }
+    const base = `${title} · ${formatUSDistance(remainMetersFromNow, 1)}`;
+    return road ? `${base} · ${road}` : base;
+  }
+
+  // ② 그다음 턴 라인 (추가거리 = step2 길이)
+  function makeSecondaryLine(step: DirStep, extraMetersAfterNext: number): string {
+    const { plain, road } = cleanInstruction(step.html_instructions);
+    let title = '';
+    if (step.maneuver && step.maneuver.startsWith('roundabout')) {
+      const exit = plain.match(/(\d+)(st|nd|rd|th)\s+exit/i)?.[1];
+      title = `다음 ▶ 로터리 ${exit ? `${exit}번째 출구` : '통과'}`;
+    } else {
+      const { icon, label } = maneuverInfo(step.maneuver);
+      title = `그다음 ▶ ${icon} ${label}`;
+    }
+    const base = `${title} · ${formatUSDistance(extraMetersAfterNext, 2)}`;
+    return road ? `${base} · ${road}` : base;
+  }
 
   /** Geocoding */
   const geocodeWithGoogle = async (query: string) => {
@@ -231,7 +251,7 @@ export default function MapScreen() {
       `https://maps.googleapis.com/maps/api/directions/json` +
       `?origin=${origin.latitude},${origin.longitude}` +
       `&destination=${destination.latitude},${destination.longitude}` +
-      `&mode=driving&language=en&region=us&key=${key}`; // 미국 기본
+      `&mode=driving&language=en&region=us&key=${key}`;
     const res = await fetch(url);
     const data = await res.json();
 
@@ -255,24 +275,18 @@ export default function MapScreen() {
     setSteps(legSteps);
     setStepIdx(0);
 
-    // 첫 줄 HUD 미리 세팅
-    if (legSteps.length > 0) {
-      const first = legSteps[0];
-      const plain = (first.html_instructions ?? '').replace(/<[^>]+>/g, '');
-      const rd = extractRoadName(plain);
-      let headline = '';
-      if (first.maneuver && first.maneuver.startsWith('roundabout')) {
-        const exit = plain.match(/(\d+)(st|nd|rd|th)\s+exit/i)?.[1];
-        headline = `로터리 ${exit ? `${exit}번째 출구` : '통과'}`;
-      } else {
-        const { icon, label } = maneuverInfo(first.maneuver);
-        headline = `${icon} ${label}`;
-      }
-      const approx = first.distance?.value ?? 0;
-      const base = `${headline} • ${formatUSDistance(approx)}`;
-      setHudLine(rd ? `${base} · ${rd}` : base);
+    // 초기 HUD
+    if (legSteps.length > 0 && myPos) {
+      const s1 = legSteps[0];
+      const end1: LatLng = { latitude: s1.end_location.lat, longitude: s1.end_location.lng };
+      const remain = haversineMeters(myPos, end1);
+      setHudPrimary(makePrimaryLine(s1, remain));
+
+      const s2 = legSteps[1];
+      if (s2) setHudSecondary(makeSecondaryLine(s2, s2.distance?.value ?? 0));
+      else setHudSecondary(null);
     } else {
-      setHudLine(null);
+      setHudPrimary(null); setHudSecondary(null);
     }
 
     if (mapRef.current && points.length) {
@@ -324,7 +338,8 @@ export default function MapScreen() {
     setDurationText(null);
     setSteps([]);
     setStepIdx(0);
-    setHudLine(null);
+    setHudPrimary(null);
+    setHudSecondary(null);
     setDebugMsg('');
   };
 
@@ -357,16 +372,15 @@ export default function MapScreen() {
         <Button title="검색" onPress={onSearch} />
       </View>
 
-      {/* ✅ HUD (방향 아이콘+라벨) */}
-      {hudLine && (
+      {/* ✅ HUD: 다음/그다음(추가거리) + 속도 */}
+      {(hudPrimary || hudSecondary) && (
         <View
           pointerEvents="none"
           style={[styles.hudBox, { top: (insets.top ?? 0) + 64 }]}
         >
-          <ThemedText style={styles.hudMain}>{hudLine}</ThemedText>
-          <ThemedText style={styles.hudSub}>
-            Speed {formatUSSpeed(gpsSpeed)}
-          </ThemedText>
+          {hudPrimary && <ThemedText style={styles.hudMain}>{hudPrimary}</ThemedText>}
+          {hudSecondary && <ThemedText style={styles.hudSecond}>{hudSecondary}</ThemedText>}
+          <ThemedText style={styles.hudSub}>Speed {formatUSSpeed(gpsSpeed)}</ThemedText>
         </View>
       )}
 
@@ -416,21 +430,12 @@ const styles = StyleSheet.create({
     left: 12, right: 12,
     backgroundColor: 'rgba(0,0,0,0.62)',
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 12,
     alignItems: 'center',
     borderRadius: 12,
     zIndex: 9999,
   },
-  hudMain: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  hudSub: {
-    color: '#fff',
-    opacity: 0.9,
-    marginTop: 4,
-    fontSize: 14,
-  },
+  hudMain:   { color: '#fff', fontSize: 20, fontWeight: '800', textAlign: 'center' },
+  hudSecond: { color: '#fff', fontSize: 16, fontWeight: '700', marginTop: 6, textAlign: 'center', opacity: 0.95 },
+  hudSub:    { color: '#fff', opacity: 0.9, marginTop: 6, fontSize: 14 },
 });
