@@ -1,7 +1,7 @@
-//app/(tabs)/map.tsx
+// app/(tabs)/map.tsx
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import AsyncStorage from '@react-native-async-storage/async-storage'; // ✅ HUD로 내비 정보 공유
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { useEffect, useRef, useState } from 'react';
@@ -11,18 +11,24 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-type LatLng = { latitude: number; longitude: number };
+/* ─── 공유 스냅샷 키 (HUD가 읽어가는 키) ─── */
+const HUD_SNAPSHOT_KEY = 'HUD_NOW';
 
-// 미국 기본
+/* ─── 타입 & 유틸 ─── */
+type LatLng = { latitude: number; longitude: number };
+type DirStep = {
+  end_location: { lat: number; lng: number };
+  html_instructions: string;
+  distance?: { text: string; value: number };
+  maneuver?: string;
+};
 const COUNTRY_BIAS = 'US';
 
-// 키
 const getMapsKey = (): string =>
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY ??
   (Constants.expoConfig?.extra as any)?.EXPO_PUBLIC_GOOGLE_MAPS_KEY ??
   '';
 
-// ── 유틸 ──────────────────────────────────────────────────────────────────────
 function decodePolyline(encoded: string): LatLng[] {
   let index = 0, lat = 0, lng = 0;
   const out: LatLng[] = [];
@@ -44,9 +50,7 @@ function haversineMeters(a: LatLng, b: LatLng): number {
   const dLng = toRad(b.longitude - a.longitude);
   const lat1 = toRad(a.latitude);
   const lat2 = toRad(b.latitude);
-  const sin1 = Math.sin(dLat / 2);
-  const sin2 = Math.sin(dLng / 2);
-  const h = sin1 * sin1 + Math.cos(lat1) * Math.cos(lat2) * sin2 * sin2;
+  const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 function formatUSDistance(meters: number, precisionForMiles: number = 1): string {
@@ -59,14 +63,6 @@ function msToMph(ms?: number | null): number | null {
   if (ms == null) return null;
   return Math.max(0, ms) * 2.23693629;
 }
-
-// ── 타입/매핑 ────────────────────────────────────────────────────────────────
-type DirStep = {
-  end_location: { lat: number; lng: number };
-  html_instructions: string;
-  distance?: { text: string; value: number };
-  maneuver?: string;
-};
 function maneuverInfo(m?: string): { glyph: string; label: string } {
   switch (m) {
     case 'turn-right': return { glyph: '↱', label: '우회전' };
@@ -96,7 +92,7 @@ function cleanInstruction(html: string): { plain: string; road?: string } {
   return { plain, road: onto?.[1] ?? toward?.[1] };
 }
 
-// ── UI 조각 ─────────────────────────────────────────────────────────────────
+/* ─── 작은 UI 조각(지도 위 오버레이) ─── */
 function PrimaryTurnCard({ titleGlyph, titleLabel, distanceText, road }:{
   titleGlyph: string; titleLabel: string; distanceText: string; road?: string | null;
 }) {
@@ -105,9 +101,9 @@ function PrimaryTurnCard({ titleGlyph, titleLabel, distanceText, road }:{
       <View style={styles.primaryIconCircle}>
         <ThemedText style={styles.primaryIcon}>{titleGlyph}</ThemedText>
       </View>
-      <View style={{ flex: 1 }}>
-        <ThemedText style={styles.primaryTitle}>{titleLabel} · {distanceText}</ThemedText>
-        {road ? <ThemedText style={styles.primaryRoad}>{road}</ThemedText> : null}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <ThemedText numberOfLines={1} style={styles.primaryTitle}>{titleLabel} · {distanceText}</ThemedText>
+        {road ? <ThemedText numberOfLines={1} style={styles.primaryRoad}>{road}</ThemedText> : null}
       </View>
     </View>
   );
@@ -118,7 +114,7 @@ function SecondaryTurnStrip({ glyph, label, distanceText, road }:{
   return (
     <View style={styles.secondaryStrip}>
       <ThemedText style={styles.secondaryGlyph}>{glyph}</ThemedText>
-      <ThemedText style={styles.secondaryText}>
+      <ThemedText numberOfLines={1} style={styles.secondaryText}>
         {label} · {distanceText}{road ? ` · ${road}` : ''}
       </ThemedText>
     </View>
@@ -145,7 +141,7 @@ function SpeedWidgets({ limitMph, currentMph }:{
   );
 }
 
-// ── 메인 ────────────────────────────────────────────────────────────────────
+/* ─── 메인 컴포넌트 ─── */
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
@@ -172,16 +168,16 @@ export default function MapScreen() {
   const [error, setError] = useState<string | null>(null);
   const [debugMsg, setDebugMsg] = useState<string>('');
 
-  // Roads 재조회 타이머
+  /* --- Roads API 폴링(정지 중에도 주기적으로 시도) --- */
   useEffect(() => {
     let timer: any;
     timer = setInterval(() => {
       if (myPos) fetchAndSetSpeedLimit(myPos);
-    }, 10000); // 10초마다 재시도(정지여도)
+    }, 10000);
     return () => clearInterval(timer);
   }, [myPos]);
 
-  // (안드) 지오코더 Key 보강
+  /* --- 안드로이드 지오코더 키 보강 --- */
   useEffect(() => {
     if (Platform.OS === 'android') {
       const key = getMapsKey();
@@ -190,7 +186,7 @@ export default function MapScreen() {
     }
   }, []);
 
-  // 권한 + 위치 추적
+  /* --- 위치 권한 + 추적 --- */
   useEffect(() => {
     let sub: { remove: () => void } | null = null;
     (async () => {
@@ -202,8 +198,6 @@ export default function MapScreen() {
       const pos = { latitude: cur.coords.latitude, longitude: cur.coords.longitude };
       setMyPos(pos);
       setGpsSpeedMs(cur.coords.speed ?? null);
-
-      // 처음에도 제한속도 시도
       await fetchAndSetSpeedLimit(pos);
 
       if (mapReadyRef.current) {
@@ -222,7 +216,7 @@ export default function MapScreen() {
     return () => { sub && sub.remove(); };
   }, []);
 
-  // HUD 계산
+  /* --- HUD 계산(다음/다다음 회전 및 단계 진척) --- */
   useEffect(() => {
     if (!myPos || steps.length === 0) return;
     const i = Math.min(stepIdx, steps.length - 1);
@@ -243,24 +237,40 @@ export default function MapScreen() {
     }
   }, [myPos, steps, stepIdx]);
 
-  function makePrimaryPayload(step: DirStep, remainMetersFromNow: number) {
+  const makePrimaryPayload = (step: DirStep, remainMetersFromNow: number) => {
     const { road } = cleanInstruction(step.html_instructions);
     const m = maneuverInfo(step.maneuver);
     return { glyph: m.glyph, label: m.label, distance: formatUSDistance(remainMetersFromNow, 1), road };
-  }
-  function makeSecondaryPayload(step: DirStep, extraMetersAfterNext: number) {
+  };
+  const makeSecondaryPayload = (step: DirStep, extraMetersAfterNext: number) => {
     const { road } = cleanInstruction(step.html_instructions);
     const m = maneuverInfo(step.maneuver);
     return { glyph: m.glyph, label: m.label, distance: formatUSDistance(extraMetersAfterNext, 2), road };
-  }
+  };
 
-  // ── Roads API: 다점 NearestRoads → 실패 시 SnapToRoads 폴백 ────────────────
+  /* --- 중요: HUD 스냅샷 저장(AsyncStorage) --- */
+  useEffect(() => {
+    // HUD가 바로 읽어서 렌더함
+    const save = async () => {
+      try {
+        const payload = {
+          primary: hudPrimary ? { glyph: hudPrimary.glyph, label: hudPrimary.label, distanceText: hudPrimary.distance, road: hudPrimary.road ?? null } : null,
+          secondary: hudSecondary ? { glyph: hudSecondary.glyph, label: hudSecondary.label, distanceText: hudSecondary.distance, road: hudSecondary.road ?? null } : null,
+          limitMph: speedLimitMph ?? null,
+          updatedAt: Date.now(),
+        };
+        await AsyncStorage.setItem(HUD_SNAPSHOT_KEY, JSON.stringify(payload));
+      } catch {}
+    };
+    save();
+  }, [hudPrimary, hudSecondary, speedLimitMph]);
+
+  /* --- Roads API: NearestRoads → SnapToRoads 폴백으로 제한속도 --- */
   const fetchSpeedLimitMph = async (pos: LatLng): Promise<{ mph: number | null; dbg: string }> => {
     const key = getMapsKey();
     if (!key) return { mph: null, dbg: 'no_key' };
 
-    // 주변 9점(현재 + 8방향) 생성
-    const mToDeg = 1 / 111320; // 위도 기준
+    const mToDeg = 1 / 111320;
     const d = 35 * mToDeg;
     const pts: LatLng[] = [
       pos,
@@ -275,64 +285,47 @@ export default function MapScreen() {
     ];
     const ptsParam = pts.map(p => `${p.latitude},${p.longitude}`).join('|');
 
-    // 1) NearestRoads
     try {
       const nrUrl = `https://roads.googleapis.com/v1/nearestRoads?points=${encodeURIComponent(ptsParam)}&key=${key}`;
       const nrRes = await fetch(nrUrl);
-      const nrText = await nrRes.text();
-      let nrJson: any = {};
-      try { nrJson = JSON.parse(nrText); } catch {}
+      const nrJson = await nrRes.json();
       const placeIds: string[] = Array.from(
         new Set((nrJson?.snappedPoints ?? []).map((s: any) => s.placeId).filter(Boolean))
       );
       if (placeIds.length > 0) {
         const limUrl = `https://roads.googleapis.com/v1/speedLimits?${placeIds.map(p => `placeId=${encodeURIComponent(p)}`).join('&')}&units=MPH&key=${key}`;
         const limRes = await fetch(limUrl);
-        const limText = await limRes.text();
-        let limJson: any = {};
-        try { limJson = JSON.parse(limText); } catch {}
+        const limJson = await limRes.json();
         const mph = limJson?.speedLimits?.[0]?.speedLimit;
         if (typeof mph === 'number') return { mph, dbg: `nearest_ok(${placeIds.length})` };
-        // 계속 진행해 폴백
-      } else {
-        // fallthrough to snap
       }
-    } catch (e: any) {
-      // ignore → snapToRoads 폴백
-    }
+    } catch {}
 
-    // 2) SnapToRoads 폴백(다점)
     try {
       const snapUrl = `https://roads.googleapis.com/v1/snapToRoads?path=${encodeURIComponent(ptsParam)}&key=${key}`;
       const snapRes = await fetch(snapUrl);
-      const snapText = await snapRes.text();
-      let snapJson: any = {};
-      try { snapJson = JSON.parse(snapText); } catch {}
+      const snapJson = await snapRes.json();
       const pids: string[] = Array.from(
         new Set((snapJson?.snappedPoints ?? []).map((s: any) => s.placeId).filter(Boolean))
       );
       if (pids.length === 0) return { mph: null, dbg: 'snap_empty' };
-
       const limUrl = `https://roads.googleapis.com/v1/speedLimits?${pids.map(p => `placeId=${encodeURIComponent(p)}`).join('&')}&units=MPH&key=${key}`;
       const limRes = await fetch(limUrl);
-      const limText = await limRes.text();
-      let limJson: any = {};
-      try { limJson = JSON.parse(limText); } catch {}
+      const limJson = await limRes.json();
       const mph = limJson?.speedLimits?.[0]?.speedLimit;
       if (typeof mph === 'number') return { mph, dbg: `snap_ok(${pids.length})` };
       return { mph: null, dbg: 'snap_no_limit' };
-    } catch (e: any) {
-      return { mph: null, dbg: `snap_err` };
+    } catch {
+      return { mph: null, dbg: 'snap_err' };
     }
   };
-
   const fetchAndSetSpeedLimit = async (pos: LatLng) => {
     const { mph, dbg } = await fetchSpeedLimitMph(pos);
     setDebugMsg(prev => `limit=${mph ?? '--'} | ${dbg}`);
     if (mph != null) setSpeedLimitMph(mph);
   };
 
-  // ── Geocoding/Directions ──────────────────────────────────────────────────
+  /* --- Geocoding & Directions --- */
   const geocodeWithGoogle = async (query: string) => {
     const key = getMapsKey();
     if (!key) throw new Error('Google API Key가 없습니다.');
@@ -350,19 +343,6 @@ export default function MapScreen() {
     throw new Error(`Geocoding 실패: ${data.status} ${data.error_message ?? ''}`);
   };
 
-  // ✅ HUD로 공유 저장 함수
-  const shareStepsToHUD = async (legSteps: DirStep[]) => {
-    try {
-      await AsyncStorage.setItem(
-        'HUD_NAV_STATE',
-        JSON.stringify({ steps: legSteps, updatedAt: Date.now() })
-      );
-      setDebugMsg(prev => `${prev} | hud:shared(${legSteps.length})`);
-    } catch {
-      setDebugMsg(prev => `${prev} | hud:share_fail`);
-    }
-  };
-
   const drawRoute = async (origin: LatLng, destination: LatLng) => {
     const key = getMapsKey();
     if (!key) throw new Error('Google API Key가 없습니다.');
@@ -376,7 +356,7 @@ export default function MapScreen() {
 
     const legs0 = data.routes?.[0]?.legs?.[0];
     const stepsArr = legs0?.steps ?? [];
-    setDebugMsg(prev => `status=${data.status}${data.error_message ? ` msg=${data.error_message}` : ''} steps=${stepsArr.length}`);
+    setDebugMsg(`status=${data.status}${data.error_message ? ` msg=${data.error_message}` : ''} steps=${stepsArr.length}`);
     if (data.status !== 'OK') throw new Error(`Directions 실패: ${data.status} ${data.error_message ?? ''}`);
 
     const route = data.routes[0];
@@ -394,9 +374,6 @@ export default function MapScreen() {
     setSteps(legSteps);
     setStepIdx(0);
 
-    // ✅ HUD 탭이 읽을 수 있도록 공유 저장
-    await shareStepsToHUD(legSteps);
-
     await fetchAndSetSpeedLimit(origin);
 
     if (mapRef.current && points.length) {
@@ -407,7 +384,7 @@ export default function MapScreen() {
     }
   };
 
-  // ── UI 이벤트 ─────────────────────────────────────────────────────────────
+  /* --- UI 이벤트 --- */
   const onSearch = async () => {
     const q = destText.trim();
     if (!q) return Alert.alert('알림', '목적지 주소를 입력하세요.');
@@ -436,13 +413,6 @@ export default function MapScreen() {
     Linking.openURL(supported ? appUrl : webUrl);
   };
 
-  const initialRegion: Region = {
-    latitude: myPos?.latitude ?? 37.7749,
-    longitude: myPos?.longitude ?? -122.4194,
-    latitudeDelta: 0.05,
-    longitudeDelta: 0.05,
-  };
-
   const clearRoute = async () => {
     setRouteCoords([]);
     setDistanceText(null);
@@ -453,11 +423,20 @@ export default function MapScreen() {
     setHudSecondary(null);
     setSpeedLimitMph(null);
     setDebugMsg('');
-    // ✅ HUD 공유 상태 정리
-    try { await AsyncStorage.removeItem('HUD_NAV_STATE'); } catch {}
+    try {
+      await AsyncStorage.setItem(HUD_SNAPSHOT_KEY, JSON.stringify({
+        primary: null, secondary: null, limitMph: null, updatedAt: Date.now()
+      }));
+    } catch {}
   };
 
-  // ── 렌더 ───────────────────────────────────────────────────────────────────
+  const initialRegion: Region = {
+    latitude: myPos?.latitude ?? 37.7749,
+    longitude: myPos?.longitude ?? -122.4194,
+    latitudeDelta: 0.05,
+    longitudeDelta: 0.05,
+  };
+
   const currentMph = msToMph(gpsSpeedMs);
 
   return (
@@ -474,7 +453,7 @@ export default function MapScreen() {
         {routeCoords.length > 1 && <Polyline coordinates={routeCoords} strokeWidth={5} />}
       </MapView>
 
-      {/* 상단 블록: 현재 턴(큰 카드) + 바로 아래 '그다음 턴' 바 */}
+      {/* 상단 오버레이: 현재 턴 + 다음 턴 + 속도 */}
       <View style={[styles.overlayTop, { top: (insets.top ?? 0) + 64 }]}>
         {hudPrimary && (
           <PrimaryTurnCard
@@ -492,8 +471,6 @@ export default function MapScreen() {
             road={hudSecondary.road ?? undefined}
           />
         )}
-
-        {/* 그 아래 줄: 제한속도 + 현재속도 */}
         <View style={styles.speedContainer}>
           <SpeedWidgets limitMph={speedLimitMph} currentMph={currentMph ?? null} />
         </View>
@@ -532,7 +509,7 @@ export default function MapScreen() {
   );
 }
 
-// ── 스타일 ───────────────────────────────────────────────────────────────────
+/* ─── 스타일 ─── */
 const GREEN = '#1d7f3d';
 const GREEN_DARK = '#11592a';
 const GREEN_LIGHT = '#2da85a';
@@ -574,13 +551,9 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 14, borderBottomRightRadius: 14,
   },
   secondaryGlyph: { color: '#c7ffcf', fontSize: 16, fontWeight: '800', marginRight: 8 },
-  secondaryText: { color: '#c7ffcf', fontSize: 15, fontWeight: '700' },
+  secondaryText: { color: '#c7ffcf', fontSize: 15, fontWeight: '700', flexShrink: 1, minWidth: 0 },
 
-  // 제한속도 줄 (방향 블록 바로 아래)
-  speedContainer: {
-    paddingHorizontal: 6, paddingTop: 8, paddingBottom: 4,
-    alignItems: 'flex-end',
-  },
+  speedContainer: { paddingHorizontal: 6, paddingTop: 8, paddingBottom: 4, alignItems: 'flex-end' },
   speedRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   speedSign: {
     width: 66, height: 66, borderRadius: 33,
