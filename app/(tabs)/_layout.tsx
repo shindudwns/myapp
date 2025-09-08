@@ -1,50 +1,36 @@
-import { Ionicons } from '@expo/vector-icons';
+/** app/(tabs)/_layout.tsx */
 import { Tabs } from 'expo-router';
+import { View } from 'react-native';
 
 export default function TabsLayout() {
   return (
     <Tabs
       screenOptions={{
-        headerShown: false,        // 상단 큰 제목 완전 제거
-        tabBarActiveTintColor: '#0a84ff',
+        headerShown: false,
+        tabBarHideOnKeyboard: true,
+        tabBarStyle: { backgroundColor: '#fff' }, // 기본(지도 등) 탭
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: '홈',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="map"
-        options={{
-          title: '지도',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="map-outline" color={color} size={size} />
-          ),
-        }}
-      />
+      <Tabs.Screen name="map" options={{ title: '지도' }} />
       <Tabs.Screen
         name="hud"
         options={{
           title: 'HUD',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="speedometer-outline" color={color} size={size} />
-          ),
+          // ✅ HUD 탭만 투명 + 흰 글씨(화면을 가리지 않음)
+          tabBarStyle: {
+            position: 'absolute',
+            backgroundColor: 'transparent',
+            borderTopWidth: 0,
+            elevation: 0,
+            shadowOpacity: 0,
+          },
+          tabBarActiveTintColor: '#fff',
+          tabBarInactiveTintColor: 'rgba(255,255,255,0.7)',
+          tabBarLabelStyle: { fontWeight: '800' },
+          tabBarBackground: () => <View style={{ flex: 1, backgroundColor: 'transparent' }} />,
         }}
       />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="compass-outline" color={color} size={size} />
-          ),
-        }}
-      />
+      <Tabs.Screen name="explore" options={{ title: 'Explore' }} />
     </Tabs>
   );
 }
